@@ -150,9 +150,12 @@ func fetchRangeWithRetry(prefix string) ([]string, error) {
 
 		lastErr = err
 		
-		// Only retry on specific errors (e.g., 429 Too Many Requests or network errors)
+		// Check for specific errors to retry
 		if _, ok := err.(*url.Error); ok {
 			// Network errors should be retried
+			continue
+		} else if strings.Contains(err.Error(), "GOAWAY") {
+			// Retry on GOAWAY errors
 			continue
 		} else if strings.Contains(err.Error(), "429") {
 			// Rate limit errors should be retried
