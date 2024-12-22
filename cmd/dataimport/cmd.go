@@ -217,14 +217,10 @@ func processResults(db *sqlx.DB, results <-chan result, done chan<- bool) {
 				continue
 			}
 
-			fullHash := res.prefix + suffix
-			partitionPrefix := fullHash[0:2]
-			hashPrefix := fullHash[0:5]
-
 			csvWriter.Write([]string{
-					partitionPrefix,
-					hashPrefix,
-					fullHash,
+					res.prefix[0:2],
+					res.prefix,
+					suffix,
 					strconv.Itoa(count),
 			})
 
