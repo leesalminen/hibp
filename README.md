@@ -42,7 +42,7 @@ docker-compose -f compose.yml up
 
 ## Create the table
 
-By following this readme, the Docker compose setup creates a network called `compose_hibpexample`. Hence, in another terminal:
+The migrate command will create a partitioned table structure optimized for fast prefix lookups. Each partition corresponds to a two-character hex prefix (00-FF), with appropriate indexes.
 
 ```sh
 docker run --rm \
@@ -51,22 +51,22 @@ docker run --rm \
     migrate --dsn=postgres://hibp:hibp@postgres:5432/hibp?sslmode=disable
 ```
 
-This command should exit without any output. No output means it executed okay.
+This command will:
+1. Create the main `hibp` table partitioned by the first two characters of the hash
+2. Create 256 partitions (one for each possible two-character hex prefix)
+3. Create indexes on each partition for optimized prefix lookups
 
 ### Import the data
 
-This will take some time, there are over 613 million lines in the V7 file. Here, I'm using the `/tmp/pwned-passwords-sha1-ordered-by-count-v7.txt` file on the host and `/tmp/pwned-passwords-sha1-ordered-by-count-v7.txt` in the container:
+The data import process has been enhanced with several improvements:
 
-```sh
-docker run --rm \
-    -net=compose_hibpexample \
-    -v=/tmp/pwned-passwords-sha1-ordered-by-count-v7.txt:/tmp/pwned-passwords-sha1-ordered-by-count-v7.txt \
-    localhost/hibp:latest \
-    data-import --dsn=postgres://hibp:hibp@postgres:5432/hibp?sslmode=disable \
-      --password-file=/tmp/pwned-passwords-sha1-ordered-by-count-v7.txt
-```
+- Parallel processing with configurable worker pool
+- Batch processing for efficient database inserts
+- Automatic retries for failed API requests
+- Rate limiting to prevent API throttling
+- Detailed error reporting and progress tracking
 
-For testing, you can import X first lines using the `--first=X` flag, line this:
+Basic import command:
 
 ```sh
 docker run --rm \
@@ -74,9 +74,21 @@ docker run --rm \
     -v=/tmp/pwned-passwords-sha1-ordered-by-count-v7.txt:/tmp/pwned-passwords-sha1-ordered-by-count-v7.txt \
     localhost/hibp:latest \
     data-import --dsn=postgres://hibp:hibp@postgres:5432/hibp?sslmode=disable \
-      --password-file=/tmp/pwned-passwords-sha1-ordered-by-count-v7.txt \
-      --first=10000
+      --password-file=/tmp/pwned-passwords-sha1-ordered-by-count-v7.txt
 ```
+
+Additional configuration options:
+
+- `--batch-size=N`: Number of records to insert in one batch (default: 1,000,000)
+- `--no-truncate`: Skip truncating the table before import
+- `--workers=N`: Number of concurrent workers (default: 32)
+
+The import process will:
+1. Truncate the existing table (unless --no-truncate is specified)
+2. Process the password file in parallel using multiple workers
+3. Insert records in efficient batches
+4. Display progress updates
+5. Automatically retry failed requests with exponential backoff
 
 ## Test
 
