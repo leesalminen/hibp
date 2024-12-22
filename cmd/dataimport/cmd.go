@@ -7,13 +7,10 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"time"
 	"bytes"
 	"encoding/csv"
 
-	"github.com/leesalminen/hibp/model"
 	"github.com/spf13/cobra"
-
 	"github.com/jmoiron/sqlx"
 
 	// import postgres
