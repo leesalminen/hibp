@@ -44,38 +44,9 @@ func init() {
 	initFlags()
 }
 
-const (
-	numWorkers = 32  // Can be adjusted based on your needs
-	queueSize  = 100 // Buffer size for channels
-	
-	maxRetries     = 5           // Increased from 3 to 5
-	initialBackoff = time.Second // Initial backoff duration
-
-	// Add new HTTP client timeout constants
-	clientTimeout    = 30 * time.Second
-	idleConnTimeout = 90 * time.Second
-)
-
-// Add a new HTTP client initialization function
-func createHTTPClient() *http.Client {
-	transport := &http.Transport{
-		MaxIdleConns:        100,
-		MaxIdleConnsPerHost: 10,
-		IdleConnTimeout:     idleConnTimeout,
-		DisableKeepAlives:   false,
-		ForceAttemptHTTP2:   true,
-	}
-
-	return &http.Client{
-		Transport: transport,
-		Timeout:   clientTimeout,
-	}
-}
-
-// Update the fetchRange function to use the custom client
-func fetchRange(prefix string, client *http.Client) ([]string, error) {
+func fetchRange(prefix string) ([]string, error) {
 	url := fmt.Sprintf("https://api.pwnedpasswords.com/range/%s", prefix)
-	resp, err := client.Get(url)
+	resp, err := http.Get(url)
 	if err != nil {
 		return nil, err
 	}
@@ -102,6 +73,14 @@ type result struct {
 	hashes []string
 	err    error
 }
+
+const (
+	numWorkers = 32  // Can be adjusted based on your needs
+	queueSize  = 100 // Buffer size for channels
+	
+	maxRetries     = 3           // Maximum number of retry attempts
+	initialBackoff = time.Second // Initial backoff duration
+)
 
 func run(cmd *cobra.Command, _ []string) error {
 	db, err := sqlx.Connect("postgres", config.dsn)
@@ -153,8 +132,8 @@ func run(cmd *cobra.Command, _ []string) error {
 	return nil
 }
 
-// Update the fetchRangeWithRetry function
-func fetchRangeWithRetry(prefix string, client *http.Client) ([]string, error) {
+// Add retry helper function
+func fetchRangeWithRetry(prefix string) ([]string, error) {
 	var lastErr error
 	backoff := initialBackoff
 
@@ -162,54 +141,43 @@ func fetchRangeWithRetry(prefix string, client *http.Client) ([]string, error) {
 		if attempt > 0 {
 			time.Sleep(backoff)
 			backoff *= 2 // Exponential backoff
-			
-			// Recreate client on retry to force new connections
-			if attempt > 1 {
-				client = createHTTPClient()
-			}
 		}
 
-		hashes, err := fetchRange(prefix, client)
+		hashes, err := fetchRange(prefix)
 		if err == nil {
 			return hashes, nil
 		}
 
 		lastErr = err
 		
-		// Enhanced error handling
-		if strings.Contains(err.Error(), "GOAWAY") ||
-			strings.Contains(err.Error(), "connection reset") ||
-			strings.Contains(err.Error(), "EOF") ||
-			strings.Contains(err.Error(), "connection refused") {
-			continue // Retry on connection issues
-		}
-		
-		// Existing retry conditions
+		// Only retry on specific errors (e.g., 429 Too Many Requests or network errors)
 		if _, ok := err.(*url.Error); ok {
+			// Network errors should be retried
 			continue
 		} else if strings.Contains(err.Error(), "429") {
+			// Rate limit errors should be retried
 			continue
 		} else if strings.Contains(err.Error(), "500") || 
 			  strings.Contains(err.Error(), "502") || 
 			  strings.Contains(err.Error(), "503") || 
 			  strings.Contains(err.Error(), "504") {
+			// Server errors should be retried
 			continue
 		}
 		
+		// Don't retry other types of errors
 		return nil, err
 	}
 
 	return nil, fmt.Errorf("after %d attempts, last error: %v", maxRetries+1, lastErr)
 }
 
-// Update the worker function to use the HTTP client
+// Modify the worker function to use retry logic
 func worker(work <-chan workItem, results chan<- result, wg *sync.WaitGroup) {
 	defer wg.Done()
-	
-	client := createHTTPClient()
 
 	for item := range work {
-		hashes, err := fetchRangeWithRetry(item.prefix[:5], client)
+		hashes, err := fetchRangeWithRetry(item.prefix[:5])
 		results <- result{
 			prefix: item.prefix,
 			hashes: hashes,

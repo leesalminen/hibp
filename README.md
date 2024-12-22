@@ -28,7 +28,7 @@ The migrate command will create a partitioned table structure optimized for fast
 
 ```sh
 docker run --rm \
-    --net=hibp_hibp_api \
+    --net=compose_hibpexample \
     localhost/hibp:latest \
     migrate --dsn=postgres://hibp:hibp@postgres:5432/hibp?sslmode=disable
 ```
@@ -51,8 +51,8 @@ The data import process has been enhanced with several improvements:
 Basic import command:
 
 ```sh
-docker run -d \
-    --net=hibp_hibp_api \
+docker run --rm \
+    --net=compose_hibpexample \
     localhost/hibp:latest \
     data-import --dsn=postgres://hibp:hibp@postgres:5432/hibp?sslmode=disable
 ```
