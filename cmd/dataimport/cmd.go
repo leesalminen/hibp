@@ -1,34 +1,34 @@
 package dataimport
 
 import (
-	"bufio"
+	"bytes"
+	"encoding/csv"
 	"fmt"
-	"log"
+	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
-	"bytes"
-	"encoding/csv"
+	"sync"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/jmoiron/sqlx"
 
-	// import postgres
 	_ "github.com/lib/pq"
 )
 
 // Command is the cobra command.
 var Command = &cobra.Command{
 	Use:   "data-import",
-	Short: "Import the password file to the table",
+	Short: "Import password hashes from HIBP API to the table",
 	RunE:  run,
 }
 
 type commandConfig struct {
 	dsn        string
-	first      int
 	noTruncate bool
-	pwdFile    string
 	batchSize  int
 }
 
@@ -36,9 +36,7 @@ var config = new(commandConfig)
 
 func initFlags() {
 	Command.Flags().StringVar(&config.dsn, "dsn", "", "Database connection string")
-	Command.Flags().IntVar(&config.first, "first", 0, "If greater than 0, limits the import to first N lines")
 	Command.Flags().BoolVar(&config.noTruncate, "no-truncate", false, "If set, do not truncate the table before import")
-	Command.Flags().StringVar(&config.pwdFile, "password-file", "", "Password file path")
 	Command.Flags().IntVar(&config.batchSize, "batch-size", 1000000, "Number of records to insert in one batch")
 }
 
@@ -46,8 +44,45 @@ func init() {
 	initFlags()
 }
 
-func run(cmd *cobra.Command, _ []string) error {
+func fetchRange(prefix string) ([]string, error) {
+	url := fmt.Sprintf("https://api.pwnedpasswords.com/range/%s", prefix)
+	resp, err := http.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
 
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("API request failed with status: %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	return strings.Split(string(body), "\r\n"), nil
+}
+
+type workItem struct {
+	prefix string
+}
+
+type result struct {
+	prefix string
+	hashes []string
+	err    error
+}
+
+const (
+	numWorkers = 32  // Can be adjusted based on your needs
+	queueSize  = 100 // Buffer size for channels
+	
+	maxRetries     = 3           // Maximum number of retry attempts
+	initialBackoff = time.Second // Initial backoff duration
+)
+
+func run(cmd *cobra.Command, _ []string) error {
 	db, err := sqlx.Connect("postgres", config.dsn)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error establishing database connection", err)
@@ -63,62 +98,146 @@ func run(cmd *cobra.Command, _ []string) error {
 		}
 	}
 
-	file, err := os.Open(config.pwdFile)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "error opening password file", err)
-		os.Exit(1)
-	}
-	defer file.Close()
+	// Create channels for work distribution and results
+	work := make(chan workItem, queueSize)
+	results := make(chan result, queueSize)
+	done := make(chan bool)
 
-	// Create temporary buffer for batch processing
+	// Start worker pool
+	var wg sync.WaitGroup
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go worker(work, results, &wg)
+	}
+
+	// Start result processor
+	go processResults(db, results, done)
+
+	// Generate and send work items
+	go func() {
+		for i := 0; i < 16*16*16*16*16; i++ {
+			prefix := fmt.Sprintf("%05X", i)
+			work <- workItem{prefix: prefix}
+		}
+		close(work)
+	}()
+
+	// Wait for all workers to complete
+	wg.Wait()
+	close(results)
+
+	// Wait for result processor to complete
+	<-done
+
+	return nil
+}
+
+// Add retry helper function
+func fetchRangeWithRetry(prefix string) ([]string, error) {
+	var lastErr error
+	backoff := initialBackoff
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			time.Sleep(backoff)
+			backoff *= 2 // Exponential backoff
+		}
+
+		hashes, err := fetchRange(prefix)
+		if err == nil {
+			return hashes, nil
+		}
+
+		lastErr = err
+		
+		// Only retry on specific errors (e.g., 429 Too Many Requests or network errors)
+		if _, ok := err.(*url.Error); ok {
+			// Network errors should be retried
+			continue
+		} else if strings.Contains(err.Error(), "429") {
+			// Rate limit errors should be retried
+			continue
+		} else if strings.Contains(err.Error(), "500") || 
+			  strings.Contains(err.Error(), "502") || 
+			  strings.Contains(err.Error(), "503") || 
+			  strings.Contains(err.Error(), "504") {
+			// Server errors should be retried
+			continue
+		}
+		
+		// Don't retry other types of errors
+		return nil, err
+	}
+
+	return nil, fmt.Errorf("after %d attempts, last error: %v", maxRetries+1, lastErr)
+}
+
+// Modify the worker function to use retry logic
+func worker(work <-chan workItem, results chan<- result, wg *sync.WaitGroup) {
+	defer wg.Done()
+
+	for item := range work {
+		hashes, err := fetchRangeWithRetry(item.prefix[:5])
+		results <- result{
+			prefix: item.prefix,
+			hashes: hashes,
+			err:    err,
+		}
+	}
+}
+
+// Add new result processor function
+func processResults(db *sqlx.DB, results <-chan result, done chan<- bool) {
 	var buffer bytes.Buffer
 	csvWriter := csv.NewWriter(&buffer)
 	csvWriter.Comma = '\t'
-	
+
 	currentLine := 0
 	batchCount := 0
-	scanner := bufio.NewScanner(file)
-	
-	for scanner.Scan() {
-		currentLine++
 
-		if config.first > 0 && config.first < currentLine {
-			break
-		}
-
-		parts := strings.Split(strings.TrimSpace(scanner.Text()), ":")
-		if len(parts) != 2 {
-			fmt.Fprintln(os.Stderr, "line", currentLine, "skipped, split by ':' did not result in 2 items")
-			continue
-		}
-		
-		hash := parts[0]
-		count, err := strconv.Atoi(parts[1])
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "line", currentLine, "skipped, error converting assumed count", parts[1], " as integer", err)
+	for res := range results {
+		if res.err != nil {
+			fmt.Fprintf(os.Stderr, "error fetching range for prefix %s: %v\n", res.prefix, res.err)
 			continue
 		}
 
-		// Write to CSV buffer (partition_prefix, prefix, hash, count)
-		partitionPrefix := hash[0:2]
-		prefix := hash[0:5]
-		csvWriter.Write([]string{
-			partitionPrefix,
-			prefix,
-			hash,
-			strconv.Itoa(count),
-		})
-		
-		batchCount++
-
-		// Flush batch if we've reached batch size
-		if batchCount >= config.batchSize {
-			if err := flushBatch(db, &buffer, csvWriter); err != nil {
-				fmt.Fprintln(os.Stderr, "error flushing batch:", err)
-				return err
+		for _, line := range res.hashes {
+			currentLine++
+			
+			parts := strings.Split(strings.TrimSpace(line), ":")
+			if len(parts) != 2 {
+				fmt.Fprintln(os.Stderr, "line", currentLine, "skipped, split by ':' did not result in 2 items")
+				continue
 			}
-			batchCount = 0
-			fmt.Printf("Imported %d lines\n", currentLine)
+
+			suffix := parts[0]
+			count, err := strconv.Atoi(parts[1])
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "line", currentLine, "skipped, error converting count", parts[1], "as integer", err)
+				continue
+			}
+
+			fullHash := res.prefix + suffix
+			partitionPrefix := fullHash[0:2]
+			hashPrefix := fullHash[0:5]
+
+			csvWriter.Write([]string{
+					partitionPrefix,
+					hashPrefix,
+					fullHash,
+					strconv.Itoa(count),
+			})
+
+			batchCount++
+
+			if batchCount >= config.batchSize {
+				if err := flushBatch(db, &buffer, csvWriter); err != nil {
+					fmt.Fprintln(os.Stderr, "error flushing batch:", err)
+					continue
+				}
+				batchCount = 0
+				fmt.Printf("Imported %d lines\n", currentLine)
+			}
 		}
 	}
 
@@ -126,15 +245,10 @@ func run(cmd *cobra.Command, _ []string) error {
 	if batchCount > 0 {
 		if err := flushBatch(db, &buffer, csvWriter); err != nil {
 			fmt.Fprintln(os.Stderr, "error flushing final batch:", err)
-			return err
 		}
 	}
 
-	if err := scanner.Err(); err != nil {
-		log.Fatal(err)
-	}
-
-	return nil
+	done <- true
 }
 
 // Add new helper function for batch flushing
