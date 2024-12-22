@@ -2,7 +2,6 @@ package dataimport
 
 import (
 	"bytes"
-	"context"
 	"encoding/csv"
 	"fmt"
 	"io"
@@ -13,11 +12,11 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"bufio"
 
 	"github.com/spf13/cobra"
 	"github.com/jmoiron/sqlx"
-
-	_ "github.com/lib/pq"
+	"github.com/lib/pq"
 )
 
 // Command is the cobra command.
@@ -264,26 +263,29 @@ func flushBatch(db *sqlx.DB, buffer *bytes.Buffer, csvWriter *csv.Writer) error 
 		return err
 	}
 
-	// Create a prepared statement for COPY
-	stmt, err := tx.Prepare(`COPY hibp(partition_prefix, prefix, hash, count) FROM STDIN WITH (FORMAT csv, DELIMITER E'\t')`)
+	stmt, err := tx.Prepare(pq.CopyIn("hibp", "partition_prefix", "prefix", "hash", "count"))
 	if err != nil {
 		tx.Rollback()
 		return err
 	}
 	defer stmt.Close()
 
-	// Get the underlying PostgreSQL-specific connection
-	copyConn, err := tx.Conn().Raw()
-	if err != nil {
-		tx.Rollback()
-		return err
+	// Read the buffer line by line and execute the copy
+	scanner := bufio.NewScanner(buffer)
+	for scanner.Scan() {
+		fields := strings.Split(scanner.Text(), "\t")
+		if len(fields) != 4 {
+			continue
+		}
+		
+		_, err = stmt.Exec(fields[0], fields[1], fields[2], fields[3])
+		if err != nil {
+			tx.Rollback()
+			return err
+		}
 	}
 
-	// Execute the COPY command
-	_, err = copyConn.(interface {
-		CopyFrom(context.Context, io.Reader, string) (int64, error)
-	}).CopyFrom(context.Background(), buffer, "COPY hibp(partition_prefix, prefix, hash, count) FROM STDIN WITH (FORMAT csv, DELIMITER E'\t')")
-
+	_, err = stmt.Exec()
 	if err != nil {
 		tx.Rollback()
 		return err
