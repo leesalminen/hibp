@@ -50,7 +50,7 @@ CREATE TABLE public.hibp (
 	
 	// Generate partitions and indexes for all hex prefixes (00-FF)
 	for i := 0; i <= 255; i++ {
-		prefix := fmt.Sprintf("%02x", i)
+		prefix := fmt.Sprintf("%02X", i)
 		
 		// Create partition
 		partitions.WriteString(fmt.Sprintf(
