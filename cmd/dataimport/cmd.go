@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 	"bufio"
+	"net"
 
 	"github.com/spf13/cobra"
 	"github.com/jmoiron/sqlx"
@@ -48,28 +49,76 @@ const (
 	numWorkers = 32  // Can be adjusted based on your needs
 	queueSize  = 100 // Buffer size for channels
 	
-	maxRetries     = 5           // Increased from 3 to 5
+	maxRetries     = 3           // Reduced back to 3 - we don't want to wait too long
 	initialBackoff = time.Second // Initial backoff duration
 
-	// Add new HTTP client timeout constants
-	clientTimeout    = 30 * time.Second
-	idleConnTimeout = 90 * time.Second
+	// Adjusted timeout constants
+	clientTimeout    = 10 * time.Second  // Reduced from 30s
+	idleConnTimeout = 30 * time.Second  // Reduced from 90s
 )
 
-// Add a new HTTP client initialization function
+// Update createHTTPClient with optimized settings
 func createHTTPClient() *http.Client {
 	transport := &http.Transport{
-		MaxIdleConns:        100,
-		MaxIdleConnsPerHost: 10,
+		MaxIdleConns:        200,              // Increased from 100
+		MaxIdleConnsPerHost: 100,               // Increased to match numWorkers
 		IdleConnTimeout:     idleConnTimeout,
 		DisableKeepAlives:   false,
 		ForceAttemptHTTP2:   true,
+		MaxConnsPerHost:     100,               // Added to limit concurrent connections
+		DisableCompression:  true,             // Added since we don't need compression
+		// Add connection timeouts
+		DialContext: (&net.Dialer{
+			Timeout:   5 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
 	}
 
 	return &http.Client{
 		Transport: transport,
 		Timeout:   clientTimeout,
 	}
+}
+
+// Update fetchRangeWithRetry to be more aggressive
+func fetchRangeWithRetry(prefix string, client *http.Client) ([]string, error) {
+	var lastErr error
+	backoff := initialBackoff
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			time.Sleep(backoff)
+			backoff *= 2
+			
+			// Only recreate client on connection errors
+			if strings.Contains(lastErr.Error(), "GOAWAY") ||
+				strings.Contains(lastErr.Error(), "connection reset") ||
+				strings.Contains(lastErr.Error(), "EOF") {
+				client = createHTTPClient()
+			}
+		}
+
+		hashes, err := fetchRange(prefix, client)
+		if err == nil {
+			return hashes, nil
+		}
+
+		lastErr = err
+		
+		// Only retry on specific errors
+		if strings.Contains(err.Error(), "GOAWAY") ||
+			strings.Contains(err.Error(), "connection reset") ||
+			strings.Contains(err.Error(), "EOF") ||
+			strings.Contains(err.Error(), "connection refused") ||
+			strings.Contains(err.Error(), "429") ||
+			strings.Contains(err.Error(), "503") {
+			continue
+		}
+		
+		return nil, err
+	}
+
+	return nil, fmt.Errorf("after %d attempts, last error: %v", maxRetries+1, lastErr)
 }
 
 // Update the fetchRange function to use the custom client
@@ -151,55 +200,6 @@ func run(cmd *cobra.Command, _ []string) error {
 	<-done
 
 	return nil
-}
-
-// Update the fetchRangeWithRetry function
-func fetchRangeWithRetry(prefix string, client *http.Client) ([]string, error) {
-	var lastErr error
-	backoff := initialBackoff
-
-	for attempt := 0; attempt <= maxRetries; attempt++ {
-		if attempt > 0 {
-			time.Sleep(backoff)
-			backoff *= 2 // Exponential backoff
-			
-			// Recreate client on retry to force new connections
-			if attempt > 1 {
-				client = createHTTPClient()
-			}
-		}
-
-		hashes, err := fetchRange(prefix, client)
-		if err == nil {
-			return hashes, nil
-		}
-
-		lastErr = err
-		
-		// Enhanced error handling
-		if strings.Contains(err.Error(), "GOAWAY") ||
-			strings.Contains(err.Error(), "connection reset") ||
-			strings.Contains(err.Error(), "EOF") ||
-			strings.Contains(err.Error(), "connection refused") {
-			continue // Retry on connection issues
-		}
-		
-		// Existing retry conditions
-		if _, ok := err.(*url.Error); ok {
-			continue
-		} else if strings.Contains(err.Error(), "429") {
-			continue
-		} else if strings.Contains(err.Error(), "500") || 
-			  strings.Contains(err.Error(), "502") || 
-			  strings.Contains(err.Error(), "503") || 
-			  strings.Contains(err.Error(), "504") {
-			continue
-		}
-		
-		return nil, err
-	}
-
-	return nil, fmt.Errorf("after %d attempts, last error: %v", maxRetries+1, lastErr)
 }
 
 // Update the worker function to use the HTTP client
