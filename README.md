@@ -8,23 +8,6 @@ This code serves primarily as an example for setting up [self-hosted HiBP for Or
 
 - PostgreSQL 13 is the only database this has been tested with and PostgreSQL is the only database supported
 
-## Download the passwords SHA-1 ordered by count file
-
-Download the SHA-1 7zip archive from HiBP website. The most up to date file can be downloaded from https://haveibeenpwned.com/Passwords. The compressed file is 12.5GB, 26GB decompressed. The file is a text file with each line in the following format:
-
-```
-SHA-SUM:INT-COUNT
-```
-
-On Ubuntu (requires ~40GB free space in `/tmp`):
-
-```sh
-sudo apt-get install p7zip-full
-cd /tmp
-wget https://downloads.pwnedpasswords.com/passwords/pwned-passwords-sha1-ordered-by-count-v7.7z
-p7zip -d pwned-passwords-sha1-ordered-by-count-v7.7z
-```
-
 ## Build the Docker image
 
 ```
@@ -36,8 +19,7 @@ A `localhost/hibp:latest` Docker image will be created.
 ## Start the example Docker compose environment
 
 ```sh
-cd examples/compose/
-docker-compose -f compose.yml up
+docker-compose up -d
 ```
 
 ## Create the table
@@ -71,10 +53,8 @@ Basic import command:
 ```sh
 docker run --rm \
     --net=compose_hibpexample \
-    -v=/tmp/pwned-passwords-sha1-ordered-by-count-v7.txt:/tmp/pwned-passwords-sha1-ordered-by-count-v7.txt \
     localhost/hibp:latest \
-    data-import --dsn=postgres://hibp:hibp@postgres:5432/hibp?sslmode=disable \
-      --password-file=/tmp/pwned-passwords-sha1-ordered-by-count-v7.txt
+    data-import --dsn=postgres://hibp:hibp@postgres:5432/hibp?sslmode=disable
 ```
 
 Additional configuration options:
@@ -91,18 +71,6 @@ The import process will:
 5. Automatically retry failed requests with exponential backoff
 
 ## Test
-
-If you import the data with `--first=X` flag, pick a hash from first X lines of the file, for example, for verion 7:
-
-```sh
-less /tmp/pwned-passwords-sha1-ordered-by-count-v7.txt
-```
-
-gives this in the first line:
-
-```
-7C4A8D09CA3762AF61E59520943DC26494F8941B:24230577
-```
 
 The `:prefix` in the `GET /range/:prefix` call is the first 5 characters of the hash, to query, execute:
 
