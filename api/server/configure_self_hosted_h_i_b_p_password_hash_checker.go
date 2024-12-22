@@ -10,8 +10,8 @@ import (
 	"github.com/go-openapi/runtime"
 	"github.com/go-openapi/runtime/middleware"
 
-	"github.com/radekg/hibp/api/server/restapi"
-	"github.com/radekg/hibp/api/server/restapi/range_restapi"
+	"github.com/leesalminen/hibp/api/server/restapi"
+	"github.com/leesalminen/hibp/api/server/restapi/range_restapi"
 )
 
 //go:generate swagger generate server --target ../../api --name SelfHostedHIBPPasswordHashChecker --spec ../../.swagger/api.swagger.yaml --api-package restapi --server-package server --principal interface{} --exclude-main

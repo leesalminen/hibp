@@ -5,10 +5,10 @@ import (
 	"os"
 	"strings"
 
-	"github.com/radekg/hibp/api/server"
-	"github.com/radekg/hibp/api/server/restapi"
-	"github.com/radekg/hibp/api/server/restapi/range_restapi"
-	"github.com/radekg/hibp/model"
+	"github.com/leesalminen/hibp/api/server"
+	"github.com/leesalminen/hibp/api/server/restapi"
+	"github.com/leesalminen/hibp/api/server/restapi/range_restapi"
+	"github.com/leesalminen/hibp/model"
 	"github.com/spf13/cobra"
 
 	"github.com/go-openapi/loads"

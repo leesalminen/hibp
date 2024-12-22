@@ -5,9 +5,9 @@ import (
 	"os"
 
 	"github.com/ory/viper"
-	"github.com/radekg/hibp/cmd/dataimport"
-	"github.com/radekg/hibp/cmd/migrate"
-	"github.com/radekg/hibp/cmd/serve"
+	"github.com/leesalminen/hibp/cmd/dataimport"
+	"github.com/leesalminen/hibp/cmd/migrate"
+	"github.com/leesalminen/hibp/cmd/serve"
 	"github.com/spf13/cobra"
 )
 

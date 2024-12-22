@@ -11,7 +11,7 @@ import (
 	"bytes"
 	"encoding/csv"
 
-	"github.com/radekg/hibp/model"
+	"github.com/leesalminen/hibp/model"
 	"github.com/spf13/cobra"
 
 	"github.com/jmoiron/sqlx"

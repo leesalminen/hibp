@@ -3,7 +3,7 @@ BUILD_FLAGS  ?=
 TEST_TIMEOUT ?=120s
 VERSION      ?= $(shell git describe --tags --always)
 
-LDFLAGS      ?= -X github.com/radekg/hibp/config.Version=$(VERSION) -w -s
+LDFLAGS      ?= -X github.com/leesalminen/hibp/config.Version=$(VERSION) -w -s
 
 SWAGGER_VERSION := v0.26.1
 SWAGGER := docker run -u $(shell id -u):$(shell id -g) --rm -v $(CURDIR):$(CURDIR) -w $(CURDIR) -e GOCACHE=/tmp/.cache --entrypoint swagger quay.io/goswagger/swagger:$(SWAGGER_VERSION)

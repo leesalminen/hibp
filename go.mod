@@ -1,4 +1,4 @@
-module github.com/radekg/hibp
+module github.com/leesalminen/hibp
 
 go 1.16
 

@@ -19,7 +19,7 @@ import (
 	"github.com/go-openapi/strfmt"
 	"github.com/go-openapi/swag"
 
-	"github.com/radekg/hibp/api/server/restapi/range_restapi"
+	"github.com/leesalminen/hibp/api/server/restapi/range_restapi"
 )
 
 // NewSelfHostedHIBPPasswordHashCheckerAPI creates a new SelfHostedHIBPPasswordHashChecker instance
