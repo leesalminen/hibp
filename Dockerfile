@@ -11,6 +11,6 @@ RUN make build
 
 FROM alpine:3.13
 COPY --from=builder /etc/ca-certificates /etc/ca-certificates
-COPY --from=builder /go/src/github.com/leesalimnen/hibp/hibp-linux-amd64 /opt/hibp/bin/hibp-linux-amd64
+COPY --from=builder /go/src/github.com/leesalminen/hibp/hibp-linux-amd64 /opt/hibp/bin/hibp-linux-amd64
 ENTRYPOINT ["/opt/hibp/bin/hibp-linux-amd64"]
 CMD ["--help"]
