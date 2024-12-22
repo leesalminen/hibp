@@ -2,6 +2,7 @@ package dataimport
 
 import (
 	"bytes"
+	"context"
 	"encoding/csv"
 	"fmt"
 	"io"
@@ -263,10 +264,25 @@ func flushBatch(db *sqlx.DB, buffer *bytes.Buffer, csvWriter *csv.Writer) error 
 		return err
 	}
 
-	_, err = tx.Exec(`
-		COPY hibp(partition_prefix, prefix, hash, count) 
-		FROM STDIN WITH (FORMAT csv, DELIMITER E'\t')
-	`, buffer.String())
+	// Create a prepared statement for COPY
+	stmt, err := tx.Prepare(`COPY hibp(partition_prefix, prefix, hash, count) FROM STDIN WITH (FORMAT csv, DELIMITER E'\t')`)
+	if err != nil {
+		tx.Rollback()
+		return err
+	}
+	defer stmt.Close()
+
+	// Get the underlying PostgreSQL-specific connection
+	copyConn, err := tx.Conn().Raw()
+	if err != nil {
+		tx.Rollback()
+		return err
+	}
+
+	// Execute the COPY command
+	_, err = copyConn.(interface {
+		CopyFrom(context.Context, io.Reader, string) (int64, error)
+	}).CopyFrom(context.Background(), buffer, "COPY hibp(partition_prefix, prefix, hash, count) FROM STDIN WITH (FORMAT csv, DELIMITER E'\t')")
 
 	if err != nil {
 		tx.Rollback()
