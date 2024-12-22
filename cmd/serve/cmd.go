@@ -70,10 +70,18 @@ func run(cmd *cobra.Command, _ []string) error {
 			return range_restapi.NewRangeSearchBadRequest()
 		}
 
-		// select items from the database:
-		rows, err := db.NamedQuery("select \"hash\", \"count\" from hibp where \"prefix\"=:prefix",
+		prefix := strings.ToUpper(rsp.HashPrefix)
+		partitionPrefix := prefix[:2] // Extract first two characters for partition
+
+		// select items from the database using partition_prefix:
+		rows, err := db.NamedQuery(`
+			select "hash", "count" 
+			from hibp 
+			where "partition_prefix" = :partition_prefix 
+			and "prefix" = :prefix`,
 			map[string]interface{}{
-				"prefix": strings.ToUpper(rsp.HashPrefix),
+				"partition_prefix": partitionPrefix,
+				"prefix":          prefix,
 			})
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "error while executing SQL query", err)

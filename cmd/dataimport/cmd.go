@@ -7,6 +7,9 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
+	"bytes"
+	"encoding/csv"
 
 	"github.com/radekg/hibp/model"
 	"github.com/spf13/cobra"
@@ -29,6 +32,7 @@ type commandConfig struct {
 	first      int
 	noTruncate bool
 	pwdFile    string
+	batchSize  int
 }
 
 var config = new(commandConfig)
@@ -38,6 +42,7 @@ func initFlags() {
 	Command.Flags().IntVar(&config.first, "first", 0, "If greater than 0, limits the import to first N lines")
 	Command.Flags().BoolVar(&config.noTruncate, "no-truncate", false, "If set, do not truncate the table before import")
 	Command.Flags().StringVar(&config.pwdFile, "password-file", "", "Password file path")
+	Command.Flags().IntVar(&config.batchSize, "batch-size", 1000000, "Number of records to insert in one batch")
 }
 
 func init() {
@@ -68,10 +73,17 @@ func run(cmd *cobra.Command, _ []string) error {
 	}
 	defer file.Close()
 
+	// Create temporary buffer for batch processing
+	var buffer bytes.Buffer
+	csvWriter := csv.NewWriter(&buffer)
+	csvWriter.Comma = '\t'
+	
 	currentLine := 0
+	batchCount := 0
 	scanner := bufio.NewScanner(file)
+	
 	for scanner.Scan() {
-		currentLine = currentLine + 1
+		currentLine++
 
 		if config.first > 0 && config.first < currentLine {
 			break
@@ -82,6 +94,7 @@ func run(cmd *cobra.Command, _ []string) error {
 			fmt.Fprintln(os.Stderr, "line", currentLine, "skipped, split by ':' did not result in 2 items")
 			continue
 		}
+		
 		hash := parts[0]
 		count, err := strconv.Atoi(parts[1])
 		if err != nil {
@@ -89,13 +102,34 @@ func run(cmd *cobra.Command, _ []string) error {
 			continue
 		}
 
-		_, sqlErr := db.NamedExec("insert into hibp (\"prefix\",\"hash\",\"count\") values (:prefix, :hash, :count)", model.Row{Prefix: hash[0:5], Hash: hash, Count: count})
-		if sqlErr != nil {
-			fmt.Fprintln(os.Stderr, "line", currentLine, "no inserted because of an SQL error", sqlErr)
-		}
+		// Write to CSV buffer (partition_prefix, prefix, hash, count)
+		partitionPrefix := hash[0:2]
+		prefix := hash[0:5]
+		csvWriter.Write([]string{
+			partitionPrefix,
+			prefix,
+			hash,
+			strconv.Itoa(count),
+		})
+		
+		batchCount++
 
-		if currentLine%1000 == 0 {
-			fmt.Println("imported", currentLine, "lines")
+		// Flush batch if we've reached batch size
+		if batchCount >= config.batchSize {
+			if err := flushBatch(db, &buffer, csvWriter); err != nil {
+				fmt.Fprintln(os.Stderr, "error flushing batch:", err)
+				return err
+			}
+			batchCount = 0
+			fmt.Printf("Imported %d lines\n", currentLine)
+		}
+	}
+
+	// Flush any remaining records
+	if batchCount > 0 {
+		if err := flushBatch(db, &buffer, csvWriter); err != nil {
+			fmt.Fprintln(os.Stderr, "error flushing final batch:", err)
+			return err
 		}
 	}
 
@@ -103,5 +137,35 @@ func run(cmd *cobra.Command, _ []string) error {
 		log.Fatal(err)
 	}
 
+	return nil
+}
+
+// Add new helper function for batch flushing
+func flushBatch(db *sqlx.DB, buffer *bytes.Buffer, csvWriter *csv.Writer) error {
+	csvWriter.Flush()
+	if csvWriter.Error() != nil {
+		return csvWriter.Error()
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+
+	_, err = tx.Exec(`
+		COPY hibp(partition_prefix, prefix, hash, count) 
+		FROM STDIN WITH (FORMAT csv, DELIMITER E'\t')
+	`, buffer.String())
+
+	if err != nil {
+		tx.Rollback()
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+
+	buffer.Reset()
 	return nil
 }
